@@ -93,7 +93,6 @@ def upload_file():
 
             # resize and centerize the digit image
             thresh = center_extent(thresh, 28, 28)
-            print(thresh.shape)
 
             # Normalize and expand dims so that image has the same shape with training image
             thresh = thresh / 255.0
@@ -117,8 +116,6 @@ def upload_file():
             else:
                 math_detect.append(str(digit[0]))
 
-    print('1111', math_detect[1])
-
     def convert_math(math_detect):
         """ Return + * and -, which were denoted as 10, 11, 12 during the training.
         """
@@ -135,9 +132,7 @@ def upload_file():
         """ Perform mathematics calculation 
         """
         math_detect = convert_math(math_detect)
-        print('222', math_detect)
         calculator = ''.join(str(item) for item in math_detect)
-        print('333', calculator)
         result = calculator
         return result
 
