@@ -4,3 +4,4 @@
 /model/data_raw
 /model/.ipynb_checkpoints
 .DS_Store
+streamlit.py

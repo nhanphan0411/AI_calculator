@@ -14,10 +14,13 @@ import imutils
 
 app = Flask(__name__)
 
-model = tf.keras.models.load_model('static/maths.h5')
-label_names = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9' '10', '11', '12']
+model = tf.keras.models.load_model(
+    '/Users/nhanpham/CoderSchool/AI_calculator/model/maths.h5')
+label_names = ['0', '1', '2', '3', '4', '5',
+               '6', '7', '8', '9' '10', '11', '12']
 
 app.register_blueprint(home_page)
+
 
 def parse_image(imgData):
     imgstr = re.search(b"base64,(.*)", imgData).group(1)
@@ -26,42 +29,37 @@ def parse_image(imgData):
         file.write(img_decode)
     return img_decode
 
-def deskew(image, width):
-    (h, w) = image.shape[:2]
-    moments = cv2.moments(image)
-    
-    skew = moments['mu11'] / moments['mu02']
-    M = np.float32([[1, skew, -0.5*w*skew],
-                    [0, 1, 0]])
-    
-    new_h = (h/w) * width
-    image = cv2.warpAffine(image, M, (w, h))
-    image = cv2.resize(image, (width, int(new_h)))
-    # image = imutils.resize(image, width=width)
 
-    return image
+def center_extent(image, eW, eH):
+    """ Process contours into training size.
+        Make sure the digit image is in the middle of the image.
+        image: input image
+        eW: new image width
+        eH: new image height
+    """
 
-def center_extent(image, size):
-    (eW, eH) = size
-
+    # RESIZE
+    # if horizontal size is longer
     if image.shape[1] > image.shape[0]:
-        image = imutils.resize(image, width=eW)
+        image = imutils.resize(image, width=eW-5)
+    # if vertical size is longer
     else:
-        image = imutils.resize(image, height=eH)
+        image = imutils.resize(image, height=eH-5)
 
+    # CENTERIZE
+    # make a black canvas with train image size
     extent = np.zeros((eH, eW), dtype='uint8')
+
+    # calculate the offsetX and offsetY of old image to new canvas
     offsetX = (eW - image.shape[1]) // 2
     offsetY = (eH - image.shape[0]) // 2
-    extent[offsetY:offsetY + image.shape[0], offsetX:offsetX+image.shape[1]] = image
 
-    CM = mahotas.center_of_mass(extent)
-    (cY, cX) = np.round(CM).astype("int32")
-    (dX, dY) = ((size[0]//2) - cX, (size[1] // 2) - cY)
-    
-    M = np.float32([[1, 0, dX], [0, 1, dY]])
-    extent = cv2.warpAffine(extent, M, size)
+    # make sure the digit image is in the middle of the canvas
+    extent[offsetY:offsetY + image.shape[0],
+           offsetX:offsetX+image.shape[1]] = image
 
     return extent
+
 
 @app.route("/upload/", methods=["POST"])
 def upload_file():
@@ -70,50 +68,56 @@ def upload_file():
     img_raw = parse_image(request.get_data())
     nparr = np.fromstring(img_raw, np.uint8)
     image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    
+
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    blurred = cv2.GaussianBlur(gray, (5,5), 0)
-    edged = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 11, 4)
-    (cnts, _) = cv2.findContours(edged.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cnts = sorted([(c, cv2.boundingRect(c)[0]) for c in  cnts], key=lambda x: x[1])
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edged = cv2.adaptiveThreshold(
+        blurred, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 11, 4)
+    (cnts, _) = cv2.findContours(edged.copy(),
+                                 cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cnts = sorted([(c, cv2.boundingRect(c)[0])
+                   for c in cnts], key=lambda x: x[1])
 
     math_detect = []
 
     for (c, _) in cnts:
+        #  find an approximate rectangle points (x,y) (x+w, y+h) around the binary image.
         (x, y, w, h) = cv2.boundingRect(c)
-        
-        if w >=5 and h>5:
-            roi = edged[y:y+int(1.2*h), x:x+w]
-            thresh = roi.copy()
-            T = mahotas.thresholding.otsu(roi)
-            thresh[thresh > T] = 255
-            thresh =  cv2.bitwise_not(thresh)
-            
-            thresh = center_extent(thresh, (28, 28))
-            thresh = deskew(thresh, 28)
-            
-            thresh = thresh / 255
-            thresh = np.reshape(thresh, (28, 28, 1))
-            
-            predictions = model.predict(np.expand_dims(thresh, axis=0))
+
+        # make sure the contours covering something big enough to be digits.
+        if w >= 5 and h >= 5:
+            single_digit_image = edged[y:y+h, x:x+w]
+
+            # copy the digit to thresh to be preprocessed and be predicted later
+            thresh = single_digit_image.copy()
+
+            # resize and centerize the digit image
+            thresh = center_extent(thresh, 28, 28)
+            print(thresh.shape)
+
+            # Normalize and expand dims so that image has the same shape with training image
+            thresh = thresh / 255.0
+            thresh = np.expand_dims(thresh, axis=-1)
+            thresh = np.expand_dims(thresh, axis=0)
+
+            predictions = model.predict(thresh)
             digit = np.argmax(predictions, axis=1)
             print(digit)
-            # cv2.rectangle(image, (x,y), (x+w, y+h), (0,255,0), 2)
-            # cv2.putText(image, label_names[digit], (x-10,y-10), cv2.FONT_HERSHEY_SIMPLEX, 2, (0,255,0), 2)
-
             if digit == "1":
                 _count = 0
                 mem = []
                 for i in range(len(thresh[9])):
-                    if thresh[9][i] > 0: 
+                    if thresh[9][i] > 0:
                         _count += 1
                         mem.append(i)
-                if _count >= 3 :
-                        math_detect.append("1")
+                if _count >= 3:
+                    math_detect.append("1")
                 else:
                     math_detect.append("/")
-            else: 
-                math_detect.append(digit[0])
+            else:
+                math_detect.append(str(digit[0]))
+
+    print('1111', math_detect[1])
 
     def convert_math(math_detect):
         """ Return + * and -, which were denoted as 10, 11, 12 during the training.
@@ -127,12 +131,13 @@ def upload_file():
                 math_detect[i] = '+'
         return math_detect
 
-
     def calculate_string(math_detect):
         """ Perform mathematics calculation 
         """
         math_detect = convert_math(math_detect)
+        print('222', math_detect)
         calculator = ''.join(str(item) for item in math_detect)
+        print('333', calculator)
         result = calculator
         return result
 
@@ -145,11 +150,10 @@ def upload_file():
 def calcu():
     val = request.get_data()
     val = str(request.get_data())
-    val1=val[2:-1]
+    val1 = val[2:-1]
 
     result = str(eval(val1))
     return result
-
 
 
 if __name__ == '__main__':
